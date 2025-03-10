@@ -246,11 +246,7 @@ Where $B_k$ is a bivector defined as $e_i e_j$ for some $i, j$ pair.
 
 You can likely see similarities between this and Givens rotations. Both approaches define $SO(n)$ matrices as a product of simpler, rotations of planes.
 
-Parameters: $\frac{n(n-1)}{2}$ angles
-
-FLOPs: $O(n^2)$
-
-As a result, Clifford rotors generalize elegantly but end up being implemented the same as Givens.
+As a result, Clifford rotors generalize elegantly but end up reducing to Givens rotations when implemented.
 
 ## Exponential Map
 
@@ -303,6 +299,44 @@ $W \approx I + 2A \quad (\text{for small } A)$
 
 During training, optimize the parameters of $A$ directly. The gradient flows through the $W$ transform, and since $W$ is guaranteed to be in $SO(n)$, no additional constraints or projections are needed.
 
+Let's explore an implementation of the Cayley Transform.
+
+```python
+def cayley_transform_exact(A):
+    I = torch.eye(A.shape[-1], device=A.device, dtype=A.dtype)
+    I_minus_A, I_plus_A = I - A, I + A
+    det_I_minus_A = torch.det(I_minus_A)
+    adj_I_minus_A = torch.linalg.inv(I_minus_A).T * det_I_minus_A
+    I_minus_A_inv = adj_I_minus_A / det_I_minus_A
+    return torch.matmul(I_minus_A_inv, I_plus_A)
+```
+
+We can build a linear layer from this
+
+```python
+class CayleyLinear(nn.Module):
+    def __init__(self, dim, bias=True):
+        super(CayleyLinear, self).__init__()
+        self.dim = dim
+        self.num_params = (dim * (dim - 1)) // 2
+        self.upper_indices = [(i, j) for i in range(dim) for j in range(i + 1, dim)]
+        self.angles = nn.Parameter(torch.randn(self.num_params) * 0.01)
+        self.bias = nn.Parameter(torch.zeros(dim)) if bias else None
+        assert len(self.upper_indices) == self.num_params
+
+    def _construct_skew_symmetric(self):
+        A = torch.zeros(self.dim, self.dim, device=self.angles.device, dtype=self.angles.dtype)
+        for idx, (i, j) in enumerate(self.upper_indices):
+            A[i, j] = self.angles[idx]
+            A[j, i] = -self.angles[idx]
+        return A
+
+    def forward(self, x):
+        assert x.shape[-1] == self.dim
+        output = x @ cayley_transform_exact(self._construct_skew_symmetric())
+        return output + self.bias if self.bias is not None else output
+```
+
 **Practical Considerations**
 
 - Storage:
@@ -320,9 +354,99 @@ However, there are optimizations to explore:
 - Sparse $A$: inversion could drop to $O(n)$ using specialized solvers.
 - Precomputation: If $A$ updates slowly, reuse $W$ over multiple steps.
 
-### Householder Reflections
+## Householder Reflections
 
-An $SO(n)$ matrix can be factored into up to $n$ Householder reflections, each defined by an $n$-dimensional vector, totaling $n^2$ parameters.
+Householder reflections offer an alternative approach to parameterize orthogonal transformations, such as those in $SO(n)$, the special orthogonal group of rotation matrices. A Householder reflection is a linear transformation that reflects a vector over a hyperplane defined by a unit vector $v \in \mathbb{R}^n$. The corresponding matrix is:
 
-Applying $m$ reflections costs $O(mn)$ flops, but spanning $SO(n)$ demands $m \approx n$, yielding $O(n^2)$. Reducing $m$ restricts coverage.
+$$
+H = I - 2 v v^T
+$$
+
+where $I$ is the $n \times n$ identity matrix, and $v v^T$ is the outer product of $v$ with itself.
+
+This matrix $H$ is orthogonal ($H^T H = I$), but a single reflection has determinant $\det(H)=-1$, making it a reflection rather than a rotation.
+
+Since $SO(n)$ requires $\det(W)=1$, a single Householder reflection doesn’t suffice. However, the product of an even number of reflections can yield a rotation with determinant 1.
+
+In fact, any matrix in $SO(n)$ can be expressed as a product of at most $n$ Householder reflections:
+
+$$
+W = H_1 H_2 \cdots H_m, \quad \text{where} \quad H_i = I - 2 v_i v_i^T,
+$$
+
+Typically, $m \leq n$, and the exact number depends on the specific rotation and dimensionality $n$. For example, in 3D ($n=3$), a rotation can often be constructed with just two reflections, but to parameterize the full $SO(n)$ generally requires up to $n$ reflections.
+
+Parameter Efficiency
+
+Each Householder reflection is defined by a unit vector $v_i \in \mathbb{R}^n$, which lies on the unit sphere $S^{n-1}$ and thus has $n-1$ independent parameters (due to the normalization constraint $||v_i||^2 = 1$). For $m$ reflections, the total parameter count is:
+
+$$
+m \cdot (n-1)
+$$
+
+This exceeds the minimal number of parameters required for $SO(n)$, indicating overparameterization.
+
+To cover all of $SO(n)$, which has dimension $n(n-1)/2$, we need:
+
+$$
+m \cdot (n-1) \geq n(n-1)/2 \quad \Rightarrow \quad m \geq n/2
+$$
+
+We could use fewer reflections, say $m \approx n/2$, to approach the minimal parameter count, but this risks not spanning the full $SO(n)$ for all $n$.
+
+In practice, $m=n$ ensures full coverage, though at the cost of extra parameters compared to methods like Givens rotations or the Cayley transform.
+
+**Computational Efficiency**
+
+Applying a Householder reflection to a vector $x \in \mathbb{R}^n$ is efficient:
+
+$$
+Hx = x - 2 (v^T x) v
+$$
+
+Compute the dot product $v^T x$: $O(n)$ FLOPs.
+
+Scale $v$ and subtract: $O(n)$ FLOPs.
+
+Total cost per reflection is $O(n)$. For $m$ reflections, applying $Wx=H_1H_2\cdots H_mx$ costs:
+
+$$
+O(m n) \text{ FLOPs}
+$$
+
+To parameterize the full $SO(n)$, setting $m=n$ yields $O(n^2)$ FLOPs, matching the cost of a full matrix-vector multiplication. Using fewer reflections, say $m < n$, reduces this to $O(m n)$, offering computational savings but limiting the set of possible rotations to a subset of $SO(n)$.
+
+Here’s a possible implementation for a Linear layer replacement
+
+```python
+class HouseholderLinear(nn.Module):
+    def __init__(self, dim, num_reflections=None, bias=True):
+        super(HouseholderLinear, self).__init__()
+        self.dim = dim
+        self.m = num_reflections if num_reflections is not None else dim
+        self.vectors = nn.Parameter(torch.randn(self.m, dim) * 0.01)
+        self.bias = nn.Parameter(torch.zeros(dim)) if bias else None
+
+    def forward(self, x):
+        assert x.shape[-1] == self.dim
+        output = x.clone()
+        v_normed = self.vectors / torch.norm(self.vectors, p=2, dim=1, keepdim=True)
+        for i in range(self.m):
+            v = v_normed[i]
+            proj = torch.einsum("...d,d->...", output, v)  # Dot product
+            output = output - 2 * torch.einsum("...,d->...d", proj, v)
+        return output + self.bias if self.bias is not None else output
+```
+
+The major drawback is the sequential nature of the reflections, which is a major bottleneck on the GPU.
+
+**Comparison to Other Methods**
+
+Compared to Givens rotations, Householder reflections adjust multiple dimensions per operation, potentially requiring fewer transformations, but each reflection is less targeted than a Givens rotation’s plane-specific action. Unlike the Cayley transform’s $O(n^3)$ construction cost, Householder reflections avoid expensive inversions, applying transformations sequentially in $O(m n)$. However, to match the parameter efficiency of Givens or Cayley ($\frac{n(n-1)}{2}$), we’d need $m \approx n/2$, which may not fully span $SO(n)$.
+
+**Practical Considerations**
+
+For transformers, where $n$ might be 64 or 512, using $m=n$ makes Householder reflections as costly as a full linear layer, negating efficiency gains. A fixed $m$ (e.g., 4) offers $O(n)$ computation and $4n$ parameters, appealing for large $n$, but sacrifices full orthogonality. This trade-off might suit applications where approximate rotations suffice, aligning with your blog’s question: Do we need to scale and skew, or is rotation enough?
+
+In summary, Householder reflections provide a flexible parameterization for $SO(n)$, balancing parameter count and computation via $m$. They don’t outshine Givens rotations or the Cayley transform for full $SO(n)$ efficiency but shine when a restricted, computationally cheaper rotation set is acceptable.
 
