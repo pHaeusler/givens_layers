@@ -440,13 +440,7 @@ class HouseholderLinear(nn.Module):
 
 The major drawback is the sequential nature of the reflections, which is a major bottleneck on the GPU.
 
-**Comparison to Other Methods**
-
 Compared to Givens rotations, Householder reflections adjust multiple dimensions per operation, potentially requiring fewer transformations, but each reflection is less targeted than a Givens rotation’s plane-specific action. Unlike the Cayley transform’s $O(n^3)$ construction cost, Householder reflections avoid expensive inversions, applying transformations sequentially in $O(m n)$. However, to match the parameter efficiency of Givens or Cayley ($\frac{n(n-1)}{2}$), we’d need $m \approx n/2$, which may not fully span $SO(n)$.
-
-**Practical Considerations**
-
-For transformers, where $n$ might be 64 or 512, using $m=n$ makes Householder reflections as costly as a full linear layer, negating efficiency gains. A fixed $m$ (e.g., 4) offers $O(n)$ computation and $4n$ parameters, appealing for large $n$, but sacrifices full orthogonality. This trade-off might suit applications where approximate rotations suffice, aligning with your blog’s question: Do we need to scale and skew, or is rotation enough?
 
 In summary, Householder reflections provide a flexible parameterization for $SO(n)$, balancing parameter count and computation via $m$. They don’t outshine Givens rotations or the Cayley transform for full $SO(n)$ efficiency but shine when a restricted, computationally cheaper rotation set is acceptable.
 
