@@ -4,35 +4,25 @@
 
 # Orthogonal Weight Matrices for Transformers
 
-Reading about the Muon optimizer got me thinking.
+If you haven't heard, the Muon optimizer is impressive and thought-provoking.
 
-Muon uses Newton-Schulz iterations to orthogonalize weight updates during each optimization step. This softly encourages orthongonality in the weight matrices of transformers.
+It achieves roughly 1.3x faster convergence for training GPT2.
 
-The results are faster convergence and improved stability.
+How?
 
-This isn’t the first time researchers have tried introduce orthogonality. Some have used Singular Value Decomposition (SVD) to enforce it, while others have added explicit constraints on the weight matrices.
+It uses Newton-Schulz iterations to orthogonalize weight updates before each optimization step.
 
-$A^T A - I = 0$
+This isn’t the first time researchers have tried to introduce orthogonality. Some have used Singular Value Decomposition (SVD) to enforce it, while others have added additional loss terms to encourage it in weight matrix.
 
-For example, this can be applied to a linear layer with an additional loss term:
+This got me thinking, rather than addressing orthogonality in the weight updates, can we change how weight matricies are parameterized to enforce it?
 
-```python
-dim = 512
-linear = nn.Linear(dim, dim)
-orthogonal_loss = linear.data.T @ linear.data - torch.eye(dim)
-```
-
-Can we avoid the optimization approach, and instead use a parameterization of $SO(n)$ that is efficient and easy to compute?
-
-I.e. rather than storing $n^2$ parameters, can we store the minimum number of parameters for an orthogonal matrix?
-
-and, rather than multiplying the input by the full matrix, can we use a more efficient algorithm for this particular parameterization?
+For instance, rather than storing $n^2$ parameters, can we store the minimum number of parameters for an orthogonal matrix? Can we also use a more efficient algorithm to train with this particular parameterization?
 
 ## Why do we want orthogonal weight matrices?
 
-Unconstrained weight matrices can rotate, scale, and skew inputs. Obviously this works, but is it an overparameterization?
+Unconstrained weight matrices can rotate, scale, and skew inputs. Obviously this works, but is it an overparameterization for many parts of a transformer?
 
-Do we need to scale and skew the token features in a transformer? Is it enought to just rotate them?
+For example, do we need to scale and skew the tokens in key and value matrices before attention? Is it enought to just rotate them?
 
 The Muon optimizer suggests that rotation is enough.
 
@@ -55,9 +45,25 @@ If these weight matrices are orthogonal, they rotate each token’s features wit
 
 So is there an efficient way to parameterize $SO(n)$?
 
+## Soft Constraints
+
+Instead of a strict parmertization of $SO(n)$, a simpler solution is to minimize:
+
+$A^T A - I = 0$
+
+Such a constraint can be applied to a linear layer with an additional loss term:
+
+```python
+dim = 512
+linear = nn.Linear(dim, dim)
+orthogonal_loss = linear.data.T @ linear.data - torch.eye(dim)
+```
+
+This helps to provide the stability of an orthogonal layer, but adds computation.
+
 ## Parameterization approaches for $SO(n)$
 
-Let's consider some approaches
+Let's consider some approaches for an orthogonal linear layer
 - Givens Rotations
 - Clifford Algebras (rotors)
 - Exponential Map (Lie algebra)
@@ -68,7 +74,7 @@ Let's consider some approaches
 
 Givens rotations parameterize $SO(n)$ with $\frac{n(n-1)}{2}$ angles, each tied to a pair of dimensions.
 
-The number of angles is due to the number of unique pairs of dimensions in an $n$-dimensional space.
+The number of angles is due to the number of unique pairs of dimensions in an $n$-dimensional space. You can also think of this as the number of planes, where two dimensions (or basis vectors) define a plane.
 
 A Givens rotation is a 2d rotation matrix, positioned at specific $ij$ indices within a larger ($n \times n$) identity matrix.
 
@@ -250,36 +256,127 @@ As a result, Clifford rotors generalize elegantly but end up reducing to Givens 
 
 ## Exponential Map
 
-Let's talk about [Lie algebra](https://en.wikipedia.org/wiki/Lie_algebra) and [Lie groups](https://en.wikipedia.org/wiki/Lie_group).
+The exponential map connects linear spaces to curved geometric structures.
 
-Both $O(n)$ and $SO(n)$ are Lie groups. The first is the Orthogonal group, and the second is the Special Orthogonal group. They define manifolds of matricies based on constraints/conditions.
+Both the Orthogonal Group $O(n)$ and the Special Orthogonal Group $SO(n)$ are [Lie groups](https://en.wikipedia.org/wiki/Lie_group), meaning they are groups with a specific geometric structure.
 
-We're aiming to parameterise a linear layer weight matrix in the Special Orthogonal group $W \in SO(n)$.
+We’re aiming to parameterise a linear layer weight matrix in the Special Orthogonal group $W \in SO(n)$.
 
-The Lie algebra of a Lie group is the tangent space. Its the local linearization of the group. Think of it like a local flat surface where a point on a complex curved manifold can be described as a linear transformation.
+The [Lie algebra](https://en.wikipedia.org/wiki/Lie_algebra) of $SO(n)$, denoted $so(n)$, is the tangent space at the identity, consisting of all $n \times n$ skew-symmetric matrices $A$ where $A^T = -A$.
 
-Suppose you have a weight matrix $W \in SO(n)$.
+This space has dimension $n(n-1)/2$, reflecting the degrees of freedom in an $n$-dimensional rotation.
 
-To ensure this matrix stays in the $SO(n)$ group during optimization, the lie algebra is a way to project the gradient matrix $\nabla_W L$ onto the tangent space of $SO(n)$.
+The exponential map bridges this algebra to the group:
 
-Fortunately this is well known for $SO(n)$ with Riemannian optimization on matrix manifolds.
+$$
+\exp: \mathfrak{so}(n) \to SO(n), \quad A \mapsto \exp(A) = \sum_{k=0}^\infty \frac{1}{k!} A^k
+$$
 
-To do this:
-- Compute the skew-symmetric component: $G = \frac{1}{2} (W^T \nabla_W L - (\nabla_W L)^T W)$
-- Apply the exponential map to get the tangent space: $W_{update} = \exp(\beta G)$
+For any skew-symmetric $A$, $\exp(A)$ is an orthogonal matrix in $SO(n)$. This property is rooted in the geometry of the Stiefel manifold $V_n(\mathbb{R}^n)$, where $SO(n)$ resides as a subset of all orthonormal $n$-frames. The exponential map provides a smooth path from a linear representation (skew-symmetric matrices) to the curved space of rotations, making it a natural fit for enforcing orthogonality in deep learning.
 
-This $G$ is the “direction” of the update in the tangent space at $W$.
+There are two interesting ways we can apply exponential maps
+- projecting gradients onto the local orthogonal space
+- directly parameterizing the weight matrix
+ 
+Let’s dive into each.
 
-**Practical Considerations**
-- Storage:
-  - $W$ is a full $n \times n$ matrix. We must store and update the full matrix, relying on the projection to enforce the manifold.
-- FLOPs:
-  - Gradient projection: O(n³)
-  - Exponential: O(n³) - this generally requires an eigenvalue decomposition
+### Projecting Gradients onto the Local Orthogonal Space
 
-So unfortunately, Lie algebras is elegant, but computationally heavy.
+This method starts with a standard $n \times n$ weight matrix $W$ and ensures it remains on $SO(n)$ during training.
 
-Maybe this is an interesting alternative to the Muon Newton-Schulz iterations?
+It uses the exponential map to update $W$ by projecting the loss gradient into the tangent space at $W$ (the "local orthogonal space") and then curving the update along the manifold.
+
+During training, we calculate $\nabla_W L$, the gradient of the loss with respect to $W$, as in standard gradient descent.
+
+Project $\nabla_W L$ into $so(n)$ at $W$ using:
+$$
+G = \frac{1}{2} W^T (\nabla_W L - W \nabla_W L^T W)
+$$
+
+$G$ is skew-symmetric and represents the orthogonal component of the gradient.  
+
+Update $W$ via:
+$$
+W_{\text{new}} = W \exp(\beta G)
+$$
+where $\beta$ is the learning rate, and $\exp(\beta G)$ is computed with `torch.linalg.matrix_exp`
+
+Here’s a custom optimizer that applies this approach to a standard linear layer:
+
+```python
+import torch
+import torch.nn as nn
+
+class ExponentialOptimizer:
+    def __init__(self, model, lr=0.01):
+        self.model = model
+        self.lr = lr
+
+    def step(self):
+        for param in self.model.parameters():
+            if param.grad is not None:
+                W = param.data  # Current weight matrix
+                grad = param.grad
+                # Project gradient into tangent space
+                G = 0.5 * (W.T @ (grad - W @ grad.T @ W))
+                # Update W using exponential map
+                update = torch.linalg.matrix_exp(self.lr * G)
+                param.data = W @ update
+```
+
+Usage like this:
+
+```python
+model = nn.Linear(3, 3, bias=False)
+optimizer = ExponentialOptimizer(model, lr=0.01)
+input_data = torch.randn(1, 3)
+output = model(input_data)
+loss = output.sum()  # Dummy loss
+loss.backward()
+optimizer.step()
+```
+
+Requires storing $n^2$ parameters and has $O(n^3)$ complexity due to the matrix exponential and projection steps.
+
+Ideal when you want to retrofit orthogonality into a pre-existing transformer layer without changing its structure. Could be used as an alternative to the Muon optimizer.
+
+### Direct Parameterization with the Exponential Map
+
+This method parameterizes the weight matrix $W$ directly as $W = \exp(A)$, where $A$ is a skew-symmetric matrix optimized during training.
+
+By working in the Lie algebra $so(n)$, we ensure $W$ is always in $SO(n)$ without additional projections.
+
+We store the $\frac{n(n-1)}{2}$ upper triangular elements of $A$, constructing a skew-symmetric matrix. The orthogonal weight matrix is then computed using `torch.linalg.matrix_exp`.
+
+Here’s a custom linear layer enforcing orthogonality by construction
+
+```python
+import torch
+import torch.nn as nn
+
+class ExponentialLinear(nn.Module):
+    def __init__(self, dim, bias=True):
+        super(ExponentialLinear, self).__init__()
+        self.dim = dim
+        self.num_params = (dim * (dim - 1)) // 2
+        self.upper_indices = torch.triu_indices(dim, dim, offset=1)
+        self.angles = nn.Parameter(torch.randn(self.num_params) * 0.01)
+        self.bias = nn.Parameter(torch.zeros(dim)) if bias else None
+
+    def _construct_skew_symmetric(self):
+        A = torch.zeros(self.dim, self.dim, device=self.angles.device, dtype=self.angles.dtype)
+        A[self.upper_indices[0], self.upper_indices[1]] = self.angles
+        A[self.upper_indices[1], self.upper_indices[0]] = -self.angles
+        return A
+
+    def forward(self, x):
+        A = self._construct_skew_symmetric()
+        W = torch.linalg.matrix_exp(A)
+        output = x @ W
+        if self.bias is not None:
+            output += self.bias
+        return output
+```
 
 ## Cayley Transform
 
@@ -297,7 +394,7 @@ Think of $A$ as encoding the “amount” of rotation in each plane. The transfo
 
 $W \approx I + 2A \quad (\text{for small } A)$
 
-During training, optimize the parameters of $A$ directly. The gradient flows through the $W$ transform, and since $W$ is guaranteed to be in $SO(n)$, no additional constraints or projections are needed.
+During training, you optimize the parameters of $A$ directly. The gradient flows through the $W$ transform, and since $W$ is guaranteed to be in $SO(n)$, no additional constraints or projections are needed.
 
 Let's explore an implementation of the Cayley Transform.
 
@@ -352,7 +449,7 @@ However, there are optimizations to explore:
 
 ## Householder Reflections
 
-Householder reflections offer an alternative approach to parameterize orthogonal transformations, such as those in $SO(n)$, the special orthogonal group of rotation matrices. A Householder reflection is a linear transformation that reflects a vector over a hyperplane defined by a unit vector $v \in \mathbb{R}^n$. The corresponding matrix is:
+Householder reflections offer an alternative approach. A Householder reflection is a linear transformation that reflects a vector over a hyperplane defined by a unit vector $v \in \mathbb{R}^n$. The corresponding matrix is:
 
 $$
 H = I - 2 v v^T
@@ -447,7 +544,7 @@ In summary, Householder reflections provide a flexible parameterization for $SO(
 | Standard Dense Linear | n² | O(n²) | Excellent | No orthogonality; uses more parameters |
 | Givens Rotations | n(n−1)/2 | O(n²) sequential per input | Poor | Slow as applied sequentially |
 | Clifford Rotors | n(n−1)/2 | O(n²) sequential per input | Poor | Slow as applied sequentially |
-| Exponential Map | n(n−1)/2 | O(n²) | Moderate | Expensive precomputation |
+| Exponential Map | n(n−1)/2 | O(n²) | Excellent | Efficient; leverages GPU parallelism |
 | Cayley Transform | n(n−1)/2 | O(n²) | Excellent | Efficient; leverages GPU parallelism |
 | Householder Reflections | m(n−1), m ≤ n | O(mn) sequential per input | Poor | Overparameterized; sequential application |
 

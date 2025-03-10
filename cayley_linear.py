@@ -32,23 +32,80 @@ class CayleyLinear(nn.Module):
         return cayley_transform_exact(self._construct_skew_symmetric())
 
 
+import time
+import matplotlib.pyplot as plt
+
+
+def benchmark_layer(layer, x, num_runs=100):
+    """Measure average forward pass time for a layer."""
+    # Warmup
+    for _ in range(10):
+        _ = layer(x)
+    torch.cuda.synchronize() if torch.cuda.is_available() else None
+
+    # Timing
+    start = time.time()
+    for _ in range(num_runs):
+        _ = layer(x)
+    torch.cuda.synchronize() if torch.cuda.is_available() else None
+    end = time.time()
+
+    return (end - start) / num_runs * 1000  # Time in milliseconds
+
+
 if __name__ == "__main__":
+    # Device setup
+    device = "mps"  # torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Running on {device}")
+
+    # Parameters
     n = 512
-    batch_size = 2
-    x = torch.randn(batch_size, n)
-    linear = torch.nn.Linear(n, n, bias=True)
+    batch_sizes = [1, 16, 64, 256]
+    num_runs = 100
 
-    cl = CayleyLinear(n, bias=True)
+    # Initialize layers
+    cayley_linear = CayleyLinear(n, bias=True).to(device)
+    standard_linear = nn.Linear(n, n, bias=True).to(device)
+
+    # Sync weights for correctness check
     with torch.no_grad():
-        W = cl.weight_matrix()
+        W = cayley_linear.weight_matrix()
+        standard_linear.weight.copy_(W.t())
+        standard_linear.bias.copy_(cayley_linear.bias)
 
+    # Validate correctness
+    x_test = torch.randn(2, n, device=device)
     with torch.no_grad():
-        linear.weight.copy_(W.t())
-        linear.bias.copy_(cl.bias)
+        y_standard = standard_linear(x_test)
+        y_cayley = cayley_linear(x_test)
+    diff_norm = torch.norm(y_standard - y_cayley).item()
+    print(f"Output difference norm: {diff_norm:.2e} (should be near zero)")
 
-    with torch.no_grad():
-        y_linear = linear(x)
-        y_cl = cl(x)
-    diff_norm = torch.norm(y_linear - y_cl).item()
+    # Benchmarking
+    cayley_times = []
+    standard_times = []
+    for batch_size in batch_sizes:
+        x = torch.randn(batch_size, n, device=device)
 
-    print("Output difference norm:", diff_norm)
+        cayley_time = benchmark_layer(cayley_linear, x, num_runs)
+        standard_time = benchmark_layer(standard_linear, x, num_runs)
+
+        cayley_times.append(cayley_time)
+        standard_times.append(standard_time)
+
+        print(f"Batch size {batch_size}:")
+        print(f"  CayleyLinear: {cayley_time:.3f} ms")
+        print(f"  Standard Linear: {standard_time:.3f} ms")
+
+    # Plotting
+    plt.figure(figsize=(8, 6))
+    plt.plot(batch_sizes, standard_times, label="Standard Linear", marker="o", color="blue")
+    plt.plot(batch_sizes, cayley_times, label="CayleyLinear (SO(n))", marker="o", color="orange")
+    plt.xlabel("Batch Size")
+    plt.ylabel("Average Forward Pass Time (ms)")
+    plt.title(f"Speed Comparison: Standard Linear vs CayleyLinear (dim={n})")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("speed_comparison.png")
+    plt.show()
