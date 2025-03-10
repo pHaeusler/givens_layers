@@ -162,11 +162,9 @@ GivensLinear can be optimized by considering that disjoint rotations can be appl
 
 Therefore, Givens composition is parameter-efficient but computationally intensive.
 
-**Crazy Optimizations**
+**Symbolic Simplification**
 
 Since the dimensions are fixed, the sequence of rotations is also fixed. So it's possible to symbolically compute the full rotation matrix, and apply it in one go.
-
-This is a reduction in FLOPs to O(n), at the cost of an insane pre-computed expression.
 
 For example, using sympy
 
@@ -187,18 +185,17 @@ for idx, (i, j) in enumerate(pairs):
 print(W)
 ```
 
-This results in the following matrix:
+For $n=3$, this results in the following matrix
+
 $$
-\begin{bmatrix}
+W = \begin{bmatrix}
     \cos(\theta_1) \cos(\theta_2) & -\sin(\theta_1) \cos(\theta_3) - \sin(\theta_2) \sin(\theta_3) \cos(\theta_1) & \sin(\theta_1) \sin(\theta_3) - \sin(\theta_2) \cos(\theta_1) \cos(\theta_3) \\
     \sin(\theta_1) \cos(\theta_2) & -\sin(\theta_1) \sin(\theta_2) \sin(\theta_3) + \cos(\theta_1) \cos(\theta_3) & -\sin(\theta_1) \sin(\theta_2) \cos(\theta_3) - \sin(\theta_3) \cos(\theta_1) \\
     \sin(\theta_2) & \sin(\theta_3) \cos(\theta_2) & \cos(\theta_2) \cos(\theta_3)
 \end{bmatrix}
 $$
 
-This is a reduction in FLOPs to O(n), at the cost of an insane pre-computed expression.
-
-This problem is that solving for higher dimensions (n=64, or 512) is intractable, although enticing...
+Unfortunately, this isn't much help, as the expression doesn't simplify the number of operations required, and solving for higher dimensions (n=64, or 512) is intractable.
 
 ## Clifford Algebras
 
@@ -247,30 +244,15 @@ $$
 
 Where $B_k$ is a bivector defined as $e_i e_j$ for some $i, j$ pair.
 
-Comparison to Givens Rotations
+You can likely see similarities between this and Givens rotations. Both approaches define $SO(n)$ matrices as a product of simpler, rotations of planes.
 
 Parameters: $\frac{n(n-1)}{2}$ angles
 
-Implementation Approaches
+FLOPs: $O(n^2)$
 
-- Givens:
-  - Dense: Precompute $G$
-  - Sparse: Apply each rotation to $x$
-- Clifford:
-  - Explicit: Store angles and bivector indices; compute $Rx\tilde{R}$
-  - Simplified: Use angles as Givens rotations ($O(n^2)$ memory).
+As a result, Clifford rotors generalize elegantly but end up being implemented the same as Givens.
 
-Gradient Computation
-- Givens:
-  - Dense: Backprop through precomputed $G$ (standard autograd, $O(n^2)$ per sample).
-  - Sparse: Chain rule through each rotation; update angles via $\frac{\partial L}{\partial x} \cdot \frac{\partial x}{\partial \theta}$ (e.g., $\frac{\partial x_i}{\partial \theta} = -\sin\theta x_i - \cos\theta x_j$), $O(n^2)$
-- Clifford:
-  - Explicit: Differentiate $Rx\tilde{R}$ in $Cl(n)$ (custom gradients, $O(n^2)$ with library like clifford).
-  - Simplified: Treat as Givens; backprop through sequential rotations ($O(n^2)$), PyTorch-friendly.
-
-Clifford rotors generalize elegantly but align with Givens in Euclidean tasks.
-
-### Exponential Map
+## Exponential Map
 
 Let's talk about [Lie algebra](https://en.wikipedia.org/wiki/Lie_algebra) and [Lie groups](https://en.wikipedia.org/wiki/Lie_group).
 
@@ -343,17 +325,4 @@ However, there are optimizations to explore:
 An $SO(n)$ matrix can be factored into up to $n$ Householder reflections, each defined by an $n$-dimensional vector, totaling $n^2$ parameters.
 
 Applying $m$ reflections costs $O(mn)$ flops, but spanning $SO(n)$ demands $m \approx n$, yielding $O(n^2)$. Reducing $m$ restricts coverage.
-
-
-
-
-### Alternative Methods
-
-**Cayley Transform**: Maps skew-symmetric (A) to $(I - A)^{-1}(I + A)$, using $\frac{n(n-1)}{2}$ parameters, but requires an O(n³) inversion.
-
-**Clifford Algebras**: Rotors generalize quaternions, yet retain $\frac{n(n-1)}{2}$ parameters and O(n²) application flops.
-
-**SO(4) Dual Quaternions**: For $n = 4$, SO(4) leverages two quaternions (6 parameters), with O(n) flops, but this does not extend efficiently beyond $n = 4$.
-
-For large ( n ), no method rivals quaternions’ SO(3) efficiency; full SO(n) resists lightweight parameterization.
 
