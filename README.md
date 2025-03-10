@@ -1,5 +1,9 @@
 # Orthogonal Weight Matrices for Transformers
 
+<script type="text/javascript" id="MathJax-script" async
+  src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+</script>
+
 Reading about the Muon optimizer got me thinking.
 
 Muon uses Newton-Schulz iterations to orthogonalize weight updates during each optimization step. This softly encourages orthongonality in the weight matrices of transformers.
@@ -100,11 +104,58 @@ So unfortunately, Lie algebras is elegant, but computationally heavy.
 
 Maybe this is an interesting alternative to the Muon Newton-Schulz iterations?
 
+## Cayley Transform
+
+The Cayley Transform offers a compelling approach to parameterize $SO(n)$. It maps a skew-symmetric matrix $A$ (where $A^T = -A$) to an orthogonal matrix via:
+
+$W = (I - A)^{-1}(I + A)$
+
+Here, $I$ is the identity matrix, and $A$ is a skew-symmetric n×nn \times nn \times n
+ matrix. This transformation ensures $W \in SO(n)$ (with determinant 1), provided $I - A$ is invertible, which holds as long as $-1$ is not an eigenvalue of $A$.
+
+The Cayley Transform is parameter-efficient. A skew-symmetric matrix $A$ has zeros on the diagonal and $\frac{n(n-1)}{2}$ independent entries above the diagonal (the lower triangle is determined by $A_{ji} = -A_{ij}$). This matches the minimal number of parameters required for $SO(n)$.
+
+It provides a direct mapping from a compact set of parameters to the $SO(n)$ manifold, avoiding the iterative composition of Givens rotations or the heavy eigenvalue computations of the exponential map.
+
+Think of $A$ as encoding the “amount” of rotation in each plane. The transform turns this into a rotation matrix $W$ that preserves norms. For small $A$, the Cayley Transform approximates the exponential map:
+
+$W \approx I + 2A \quad (\text{for small } A)$
+
+This mirrors the Lie algebra approach but avoids exponentiation, suggesting a simpler computational path.
+
+Practical Implementation
+To use the Cayley Transform in a transformer:
+Parameterize $A$: Store the $\frac{n(n-1)}{2}$ upper-triangular elements of a skew-symmetric matrix.
+
+Construct $W$: Compute $(I - A)^{-1}(I + A)$ during the forward pass.
+
+Apply $W$: Use $W$ as the weight matrix for $k = x W_K$ or $v = x W_V$.
+
+Optimization: During training, optimize the parameters of $A$ directly. The gradient flows through the transform, and since $W$ is guaranteed to be in $SO(n)$, no additional constraints or projections are needed.
+
+Computational Cost
+Storage: $O(n^2)$ for $A$’s upper triangle, though sparse representations could reduce this.
+
+Matrix Inversion: Computing $(I - A)^{-1}$ costs $O(n^3)$ with standard methods like LU decomposition.
+
+Matrix Multiplications: $(I - A)^{-1}(I + A)$ adds $O(n^3)$ FLOPs, and applying $W$ to an input vector is $O(n^2)$.
+
+Total Forward Pass: $O(n^3)$ dominates due to the inversion.
+
+This is a drawback—$O(n^3)$ is no better than the exponential map or SVD-based methods. However, there are optimizations to explore:
+Sparse $A$: If $A$ has few non-zero entries (e.g., band-limited), inversion could drop to $O(n)$ using specialized solvers.
+
+Precomputation: If $A$ updates slowly, precompute $W$ and reuse it, amortizing the $O(n^3)$ cost over multiple steps.
+
+
+
 ### Householder Reflections
 
 An $SO(n)$ matrix can be factored into up to $n$ Householder reflections, each defined by an $n$-dimensional vector, totaling $n^2$ parameters.
 
 Applying $m$ reflections costs $O(mn)$ flops, but spanning $SO(n)$ demands $m \approx n$, yielding $O(n^2)$. Reducing $m$ restricts coverage.
+
+
 
 
 ### Alternative Methods
