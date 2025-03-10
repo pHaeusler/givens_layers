@@ -304,11 +304,8 @@ Let's explore an implementation of the Cayley Transform.
 ```python
 def cayley_transform_exact(A):
     I = torch.eye(A.shape[-1], device=A.device, dtype=A.dtype)
-    I_minus_A, I_plus_A = I - A, I + A
-    det_I_minus_A = torch.det(I_minus_A)
-    adj_I_minus_A = torch.linalg.inv(I_minus_A).T * det_I_minus_A
-    I_minus_A_inv = adj_I_minus_A / det_I_minus_A
-    return torch.matmul(I_minus_A_inv, I_plus_A)
+    W = torch.linalg.solve(I - A, I + A)
+    return W
 ```
 
 We can build a linear layer from this
@@ -319,16 +316,15 @@ class CayleyLinear(nn.Module):
         super(CayleyLinear, self).__init__()
         self.dim = dim
         self.num_params = (dim * (dim - 1)) // 2
-        self.upper_indices = [(i, j) for i in range(dim) for j in range(i + 1, dim)]
+        self.upper_indices = torch.triu_indices(dim, dim, offset=1)
         self.angles = nn.Parameter(torch.randn(self.num_params) * 0.01)
         self.bias = nn.Parameter(torch.zeros(dim)) if bias else None
         assert len(self.upper_indices) == self.num_params
 
     def _construct_skew_symmetric(self):
         A = torch.zeros(self.dim, self.dim, device=self.angles.device, dtype=self.angles.dtype)
-        for idx, (i, j) in enumerate(self.upper_indices):
-            A[i, j] = self.angles[idx]
-            A[j, i] = -self.angles[idx]
+        A[self.upper_indices[0], self.upper_indices[1]] = self.angles
+        A[self.upper_indices[1], self.upper_indices[0]] = -self.angles
         return A
 
     def forward(self, x):
