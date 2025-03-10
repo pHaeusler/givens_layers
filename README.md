@@ -440,3 +440,15 @@ Compared to Givens rotations, Householder reflections adjust multiple dimensions
 
 In summary, Householder reflections provide a flexible parameterization for $SO(n)$, balancing parameter count and computation via $m$. They don’t outshine Givens rotations or the Cayley transform for full $SO(n)$ efficiency but shine when a restricted, computationally cheaper rotation set is acceptable.
 
+## Summary
+
+| Method                  | Parameters         | Computation                                                                   | GPU Efficiency | Notes                                             |
+|-------------------------|--------------------|-------------------------------------------------------------------------------|----------------|---------------------------------------------------|
+| Standard Dense Linear | n² | O(n²) | Excellent | No orthogonality; uses more parameters |
+| Givens Rotations | n(n−1)/2 | O(n²) sequential per input | Poor | Slow as applied sequentially |
+| Clifford Rotors | n(n−1)/2 | O(n²) sequential per input | Poor | Slow as applied sequentially |
+| Exponential Map | n(n−1)/2 | O(n²) | Moderate | Expensive precomputation |
+| Cayley Transform | n(n−1)/2 | O(n²) | Excellent | Efficient; leverages GPU parallelism |
+| Householder Reflections | m(n−1), m ≤ n | O(mn) sequential per input | Poor | Overparameterized; sequential application |
+
+
