@@ -162,6 +162,44 @@ GivensLinear can be optimized by considering that disjoint rotations can be appl
 
 Therefore, Givens composition is parameter-efficient but computationally intensive.
 
+**Crazy Optimizations**
+
+Since the dimensions are fixed, the sequence of rotations is also fixed. So it's possible to symbolically compute the full rotation matrix, and apply it in one go.
+
+This is a reduction in FLOPs to O(n), at the cost of an insane pre-computed expression.
+
+For example, using sympy
+
+```python
+from sympy import SparseMatrix, cos, sin, symbols
+
+n = 3
+pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
+thetas = symbols("theta1:%d" % (len(pairs) + 1))
+W = SparseMatrix.eye(n)
+for idx, (i, j) in enumerate(pairs):
+    G = SparseMatrix.eye(n)
+    theta = thetas[idx]
+    G[i, i], G[j, j] = cos(theta), cos(theta)
+    G[i, j], G[j, i] = -sin(theta), sin(theta)
+    W = W * G
+
+print(W)
+```
+
+This results in the following matrix:
+$$
+\begin{bmatrix}
+    \cos(\theta_1) \cos(\theta_2) & -\sin(\theta_1) \cos(\theta_3) - \sin(\theta_2) \sin(\theta_3) \cos(\theta_1) & \sin(\theta_1) \sin(\theta_3) - \sin(\theta_2) \cos(\theta_1) \cos(\theta_3) \\
+    \sin(\theta_1) \cos(\theta_2) & -\sin(\theta_1) \sin(\theta_2) \sin(\theta_3) + \cos(\theta_1) \cos(\theta_3) & -\sin(\theta_1) \sin(\theta_2) \cos(\theta_3) - \sin(\theta_3) \cos(\theta_1) \\
+    \sin(\theta_2) & \sin(\theta_3) \cos(\theta_2) & \cos(\theta_2) \cos(\theta_3)
+\end{bmatrix}
+$$
+
+This is a reduction in FLOPs to O(n), at the cost of an insane pre-computed expression.
+
+This problem is that solving for higher dimensions (n=64, or 512) is intractable, although enticing...
+
 ## Clifford Algebras
 
 Clifford algebras, $Cl(n)$, offer a way to manage rotations in $n$-dimensional space.
